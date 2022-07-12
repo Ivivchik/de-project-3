@@ -84,7 +84,7 @@ def get_s3_filename(filename, ti):
     s3_filename = f'https://storage.yandexcloud.net/s3-sprint3/cohort_{cohort}/{nickname}/project/{increment_id}/{filename}'
     response = requests.get(s3_filename)
     if not response:
-        raise RequestException(f'response is: {response}')
+        raise RequestException(f'Error while attemt to get response, response is: {response}')
     ti.xcom_push(key='s3_filename', value=s3_filename)
     task_logger.info(f's3_filename={s3_filename}')
 
