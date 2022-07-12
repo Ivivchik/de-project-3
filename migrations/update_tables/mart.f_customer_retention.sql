@@ -20,8 +20,7 @@ WITH t1 AS(
                         "status",
                         week_of_year
         FROM staging.user_order_log uol
-        LEFT JOIN mart.d_calENDar AS dc ON uol.date_time::DATE = dc.date_actual
-        WHERE uol.date_time::DATE = '{{ds}}'),
+        LEFT JOIN mart.d_calENDar AS dc ON uol.date_time::DATE = dc.date_actual),
     t2 AS (
         SELECT customer_id,
                week_of_year,
