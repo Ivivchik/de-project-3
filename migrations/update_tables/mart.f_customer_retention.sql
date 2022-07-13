@@ -1,26 +1,21 @@
 DELETE FROM mart.f_customer_retention
 WHERE period_id IN (
 	SELECT DISTINCT dc.week_of_year
-    FROM staging.user_order_log uol
-    JOIN mart.d_calendar dc on dc.date_actual = date_time::DATE
-    WHERE date_time::DATE = '{{ds}}');
+    FROM mart.f_sales fs
+    JOIN mart.d_calendar dc on fs.date_id = dc.date_id);
 
 
 WITH t1 AS(
-        SELECT DISTINCT dc.date_id,
+        SELECT DISTINCT fs.date_id,
                         item_id,
                         customer_id,
                         city_id,
                         quantity, 
-                        CASE
-                        WHEN "status" = 'refunded'
-                        THEN payment_amount * -1
-                        ELSE payment_amount
-                        END AS payment_amount,
+                        payment_amount,
                         "status",
                         week_of_year
-        FROM staging.user_order_log uol
-        LEFT JOIN mart.d_calENDar AS dc ON uol.date_time::DATE = dc.date_actual),
+        FROM mart.f_sales fs
+        LEFT JOIN mart.d_calendar AS dc ON fs.date_id = dc.date_id),
     t2 AS (
         SELECT customer_id,
                week_of_year,
