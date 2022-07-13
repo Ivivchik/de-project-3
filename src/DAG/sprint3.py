@@ -2,6 +2,7 @@ import time
 import requests
 import json
 import logging
+import pandas as pd
 
 from requests.exceptions import RequestException
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
 from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.operators.dummy_operator import DummyOperator
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.hooks.http_hook import HttpHook
 
 http_conn_id = HttpHook.get_connection('http_conn_id')
@@ -79,14 +81,24 @@ def get_increment(date, ti):
     task_logger.info(f'increment_id={increment_id}')
 
 
-def get_s3_filename(filename, ti):
+def upload_s3_file_to_postgres(filename, date, pg_table, pg_schema, ti):
     increment_id = ti.xcom_pull(key='increment_id')
     s3_filename = f'https://storage.yandexcloud.net/s3-sprint3/cohort_{cohort}/{nickname}/project/{increment_id}/{filename}'
     response = requests.get(s3_filename)
     if not response:
-        raise RequestException(f'Error while attemt to get response, response is: {response}')
-    ti.xcom_push(key='s3_filename', value=s3_filename)
-    task_logger.info(f's3_filename={s3_filename}')
+        raise RequestException(f'response is: {response}')
+
+    local_filename = date.replace('-', '') + '_' + filename
+
+    response = requests.get(s3_filename)
+    with open(local_filename, 'wb') as f:
+        f.write(response.content)
+
+    df = pd.read_csv(local_filename)
+
+    postgres_hook = PostgresHook(postgres_conn_id)
+    engine = postgres_hook.get_sqlalchemy_engine()
+    df.to_sql(pg_table, engine, schema=pg_schema, if_exists='append', index=False)
 
 
 args = {
@@ -106,7 +118,7 @@ with DAG(
         catchup=True,
         max_active_runs=1,
         start_date=datetime.today() - timedelta(days=8),
-        end_date=datetime.today() - timedelta(days=2),
+        end_date=datetime.today() - timedelta(days=1),
 ) as dag:
     generate_report = PythonOperator(
         task_id='generate_report',
@@ -121,17 +133,20 @@ with DAG(
         python_callable=get_increment,
         op_kwargs={'date': business_dt})
 
-    get_s3_filename = PythonOperator(
-        task_id='get_s3_filename',
-        python_callable=get_s3_filename,
-        op_kwargs={'filename': 'user_orders_log_inc.csv'})
+    upload_s3_file_to_postgres = PythonOperator(
+        task_id='upload_s3_file_to_postgres',
+        python_callable=upload_s3_file_to_postgres,
+        op_kwargs={'date': business_dt,
+                   'filename': 'user_orders_log_inc.csv',
+                   'pg_table': 'user_order_log_inc',
+                   'pg_schema': 'staging'})
 
-    upload_user_order_inc_from_s3 = PostgresOperator(
-        task_id='upload_user_order_inc_from_s3',
-        postgres_conn_id=postgres_conn_id,
-        sql="COPY {{ params.pg_schema }}.{{ params.pg_table }} FROM PROGRAM 'curl {{ ti.xcom_pull(key='s3_filename') }}' HEADER CSV DELIMITER ',';",
-        params={'pg_schema': 'staging', 'pg_table': 'user_order_log_inc'}
-    )
+    # upload_user_order_inc_from_s3 = PostgresOperator(
+    #     task_id='upload_user_order_inc_from_s3',
+    #     postgres_conn_id=postgres_conn_id,
+    #     sql="COPY {{ params.pg_schema }}.{{ params.pg_table }} FROM PROGRAM 'curl {{ ti.xcom_pull(key='s3_filename') }}' HEADER CSV DELIMITER ',';",
+    #     params={'pg_schema': 'staging', 'pg_table': 'user_order_log_inc'}
+    # )
 
     update_user_order_log = PostgresOperator(
         task_id='update_user_order_log',
@@ -194,9 +209,8 @@ with DAG(
             generate_report
             >> get_report
             >> get_increment
-            >> get_s3_filename
             >> [create_staging_user_order_log_inc, create_mart_f_customer_retention]
-            >> upload_user_order_inc_from_s3
+            >> upload_s3_file_to_postgres
             >> update_user_order_log
             >> truncate_user_order_inc
             >> [update_d_item_table, update_d_city_table, update_d_customer_table]
